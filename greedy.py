@@ -3,11 +3,9 @@ from MinTree import MinTree
 from scipy.sparse import csc_matrix, coo_matrix, csr_matrix, lil_matrix
 
 
-
-
-# Greedy search for find a dense subgraph in a monopartite graph.
-# Input : sparse graph adjacency matrix 
-# Output : subgraph and its corresponding score 
+# Greedy search for find a dense subgraph i.e. clique in a monopartite graph.
+# Input : sparse graph adjacency matrix
+# Output : subgraph and its corresponding score
 def fastGreedyDecreasing(G):
     # Mcur is a sysmmetric matrix.
     # Mcur : lil_matrix
@@ -22,11 +20,11 @@ def fastGreedyDecreasing(G):
     deleted = []
     bestNumDeleted = 0
 
-    # To avoid trivial solution in finding a dense clique.
+    # Constaint to avoid trivial solution in finding a dense clique.
     while len(curSet) > 2:
         node, val = tree.getMin()
         curScore -= val
-        # Update priority
+        # Update priority for the node with min priority and its neighbors.
         for j in Mcur.rows[node]:
             delt = Mcur[node, j]
             tree.changeVal(j, -delt)
