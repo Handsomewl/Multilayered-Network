@@ -13,16 +13,74 @@ from numpy import matmul
 from sklearn.utils.extmath import randomized_svd, squared_norm
 from scipy.sparse import csc_matrix, coo_matrix, csr_matrix, lil_matrix
 
+
 # Norm for both dense and sparse matrix
 def norm(x):
     if sp.issparse(x):
         return sp.linalg.norm(x)
     return np.linalg.norm(x)
 
+# Check a matrix symmetric or not
+
+
+def issymmetric(x):
+    if x.shape[0] != x.shape[1]:
+        return False
+    flag = False
+    if sp.issparse(x):
+        flag = bool(1-(x.T-x).nnz)
+    return flag
+
+# Check a graph have self edges or not
+
+
+def ishaveSelfEdge(g):
+    # g : sparse adjacency matrix
+    for idx in range(g.shape[0]):
+        if g[idx, idx]:
+            return True
+    return False
+
 # Create a random matrix with size and probability
-def random_matrix(size, prob):
-    a = np.random.random(size)
-    return np.where(a<prob,1,0)
+
+
+def random_matrix(size, prob, sparsity=None):
+    if sparsity == None:
+        a = np.random.random(size)
+        b = np.where(a < prob, 1, 0)
+    else:
+        (m, n) = size
+        b = sp.rand(m, n, density=sparsity, format='lil')
+        b[b > prob] = 0
+        for x, y in zip(b.nonzero()[0], b.nonzero()[1]):
+            b[x, y] = 1
+    return b
+
+# The project function used in PGD
+
+
+def projectBack(v, lowb, upperb):
+    tmp1 = np.where(v > upperb, upperb, v)
+    tmp2 = np.where(tmp1 < lowb, lowb, tmp1)
+    return tmp2
+
+# Evaluate metric
+
+
+def EvaluateF1(minedResult, groundTruth):
+    # Input are two sets of nodes.
+    tmp = groundTruth & minedResult
+    if len(minedResult) == 0:
+        precision = 0
+    else:
+        precision = len(tmp)/len(minedResult)
+    recall = len(tmp)/len(groundTruth)
+
+    if precision+recall == 0:
+        f1 = 0
+    else:
+        f1 = 2*precision*recall/(precision+recall)
+    return precision, recall, f1
 
 # Error for model the two coupled matrix
 
@@ -278,10 +336,10 @@ def greedy(G, U):
         # delta = np.sqrt(norm(U[:, idx])**2 / U.shape[0])
         delta = np.sqrt(sum(U[:, idx])**2 / U.shape[0])
         Set = list(np.argwhere(np.array(U[:, idx]) > delta)[:, 0])
-        print('length of candidate set:',len(Set))
+        print('length of candidate set:', len(Set))
         g = G.copy().asfptype()
         g = g[Set, :][:, Set]
-        
+
         if len(Set) > 1:
             finalSet, score = fastGreedyDecreasing(g)
             print('length of bestSet', len(finalSet), 'bestScore', score)
@@ -329,8 +387,56 @@ def extend(g, sub):
             curSet.add(neigh)
             subgraph.append(neigh)
             nodes.append(neigh)
+            tmp_addSet = set(g.rows[neigh]) - curSet
+            addSet = addSet | tmp_addSet
+
     if len(nodes):
-        print("Add nodes:", nodes,'length of current subgraph:',len(subgraph) ,"curAveScore:", curAveScore)
+        print("Add nodes:", nodes, 'length of current subgraph:',
+              len(subgraph), "curAveScore:", curAveScore)
     else:
         print("No nodes add to the current subgraph!")
     return subgraph, curAveScore
+
+# Tri-Matrix multiplicative update
+def TriMU(G: list, C: list, R, epochs, reg=1e-6):
+    """G:list of adjacency matrix
+       C:list of cross-layer dependency matrix
+    """
+    g1, g2, g3 = G[0], G[1], G[2]
+    c12, c13, c23 = C[0], C[1], C[2]
+    alpha = (norm(g1)+norm(g2)) / (2*norm(c12))
+    beta = (norm(g1)+norm(g3)) / (2*norm(c13))
+    gamma = (norm(g2)+norm(g3)) / (2*norm(c23))
+    # Initialize U,V,W
+    U = np.random.rand(g1.shape[0], R)
+    V = np.random.rand(g2.shape[0], R)
+    W = np.random.rand(g3.shape[0], R)
+
+    # L1-norm　regularization term
+    reg_u = reg * np.ones(U.shape)
+    reg_v = reg * np.ones(V.shape)
+    reg_w = reg * np.ones(W.shape)
+
+    # Multiplicative Update
+    for it in range(epochs):
+        # Update U
+        u_upper = 2 * g1 * U + alpha * c12 @ V + beta * c13 @ W
+        u_lower = U @ (2*U.T@U + alpha*V.T@V + beta*W.T@W) + reg_u
+        u_res = np.power(np.divide(u_upper, u_lower), 1/2)
+        # u_res[np.isnan(u_res)] = 0.01
+        U = np.multiply(U, u_res)
+
+        # Update V
+        v_upper = 2 * g2 * V + alpha * c12.T @ U + gamma * c23 @ W
+        v_lower = V @ (2*V.T@V + alpha*U.T@U + gamma*W.T@W) + reg_v
+        v_res = np.power(np.divide(v_upper, v_lower), 1/2)
+        # v_res[np.isnan(v_res)] = 0.01
+        V = np.multiply(V, v_res)
+
+        # Update W
+        w_upper = 2 * g3 * W + beta * c13.T @ U + gamma * c23.T @ V
+        w_lower = W @ (2*W.T@W + beta*U.T@U + gamma*V.T@V) + reg_w
+        w_res = np.power(np.divide(w_upper, w_lower), 1/2)
+        # w_res[np.isnan(w_res)] = 0.01
+        W = np.multiply(W, w_res)
+    return U, V, W
